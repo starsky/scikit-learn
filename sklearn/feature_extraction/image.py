@@ -1,6 +1,12 @@
 """
 The :mod:`sklearn.feature_extraction.image` submodule gathers utilities to
 extract features from images.
+
+This is version altered by me cause, PatchExtractor as buggy and did not extract
+patches with correct dtype.
+Second I extended PatchExtractor - so now step size can be defined with different values
+for x and y directions.
+See todos cause there are still some issues.
 """
 
 # Authors: Emmanuelle Gouillart <emmanuelle.gouillart@normalesup.org>
@@ -202,7 +208,7 @@ def grid_to_graph(n_x, n_y, n_z=1, mask=None, return_as=sparse.coo_matrix,
 ###############################################################################
 # From an image to a set of small image patches
 
-def _compute_n_patches(i_h, i_w, p_h, p_w, max_patches=None):
+def _compute_n_patches(i_h, i_w, p_h, p_w, max_patches=None, step_size=1):
     """Compute the number of patches that will be extracted in an image.
 
     Read more in the :ref:`User Guide <image_feature_extraction>`.
@@ -222,8 +228,12 @@ def _compute_n_patches(i_h, i_w, p_h, p_w, max_patches=None):
         between 0 and 1, it is taken to be a proportion of the total number
         of patches.
     """
-    n_h = i_h - p_h + 1
-    n_w = i_w - p_w + 1
+    if isinstance(step_size, (numbers.Integral)):
+        s_h, s_w = step_size, step_size
+    else:
+        s_h, s_w = step_size
+    n_h = ((i_h - p_h) / s_h) + 1
+    n_w = ((i_w - p_w) / s_w) + 1
     all_patches = n_h * n_w
 
     if max_patches:
@@ -281,7 +291,9 @@ def extract_patches(arr, patch_shape=8, extraction_step=1):
         patch_shape = tuple([patch_shape] * arr_ndim)
     if isinstance(extraction_step, numbers.Number):
         extraction_step = tuple([extraction_step] * arr_ndim)
-
+    else:
+        ys, xs = extraction_step
+        extraction_step = tuple([ys, xs, 1])
     patch_strides = arr.strides
 
     slices = [slice(None, None, st) for st in extraction_step]
@@ -297,7 +309,7 @@ def extract_patches(arr, patch_shape=8, extraction_step=1):
     return patches
 
 
-def extract_patches_2d(image, patch_size, max_patches=None, random_state=None):
+def extract_patches_2d(image, patch_size, max_patches=None, random_state=None, step_size=1):
     """Reshape a 2D image into a collection of patches
 
     The resulting patches are allocated in a dedicated array.
@@ -371,9 +383,9 @@ def extract_patches_2d(image, patch_size, max_patches=None, random_state=None):
 
     extracted_patches = extract_patches(image,
                                         patch_shape=(p_h, p_w, n_colors),
-                                        extraction_step=1)
+                                        extraction_step=step_size)
 
-    n_patches = _compute_n_patches(i_h, i_w, p_h, p_w, max_patches)
+    n_patches = _compute_n_patches(i_h, i_w, p_h, p_w, max_patches, step_size=step_size)
     if max_patches:
         rng = check_random_state(random_state)
         i_s = rng.randint(i_h - p_h + 1, size=n_patches)
@@ -381,7 +393,6 @@ def extract_patches_2d(image, patch_size, max_patches=None, random_state=None):
         patches = extracted_patches[i_s, j_s, 0]
     else:
         patches = extracted_patches
-
     patches = patches.reshape(-1, p_h, p_w, n_colors)
     # remove the color dimension if useless
     if patches.shape[-1] == 1:
@@ -435,6 +446,9 @@ def reconstruct_from_patches_2d(patches, image_size):
     return img
 
 
+#Issues:
+# transform method does throws exception whene there is no integer number of patches
+# in row or column this behavior can be fixed.
 class PatchExtractor(BaseEstimator):
     """Extracts patches from a collection of images
 
@@ -454,10 +468,13 @@ class PatchExtractor(BaseEstimator):
         Pseudo number generator state used for random sampling.
 
     """
-    def __init__(self, patch_size=None, max_patches=None, random_state=None):
+    def __init__(self, patch_size=None, max_patches=None, random_state=None, step_size=1,
+                 raise_integer_patches_count_exception=True):
         self.patch_size = patch_size
         self.max_patches = max_patches
         self.random_state = random_state
+        self.step_size = step_size
+        self.raise_integer_patches_count_exception = raise_integer_patches_count_exception
 
     def fit(self, X, y=None):
         """Do nothing and return the estimator unchanged
@@ -498,14 +515,19 @@ class PatchExtractor(BaseEstimator):
 
         # compute the dimensions of the patches array
         p_h, p_w = patch_size
-        n_patches = _compute_n_patches(i_h, i_w, p_h, p_w, self.max_patches)
+        n_patches = _compute_n_patches(i_h, i_w, p_h, p_w, self.max_patches, step_size=self.step_size)
         patches_shape = (n_images * n_patches,) + patch_size
         if n_channels > 1:
             patches_shape += (n_channels,)
+
+        if n_patches != int(n_patches) and self.raise_integer_patches_count_exception:
+            raise ValueError('With given step, patch size and img size, there is not integer number of'
+                             'patches thus it will not be possible to reconstruct the image.'
+                             'You can turn off this exeception with "raise_integer_patches_count_exception" parameter.')
 
         # extract the patches
         patches = np.empty(patches_shape, dtype=X.dtype)
         for ii, image in enumerate(X):
             patches[ii * n_patches:(ii + 1) * n_patches] = extract_patches_2d(
-                image, patch_size, self.max_patches, self.random_state)
+                image, patch_size, self.max_patches, self.random_state, step_size=self.step_size)
         return patches
