@@ -504,7 +504,7 @@ class PatchExtractor(BaseEstimator):
             patches_shape += (n_channels,)
 
         # extract the patches
-        patches = np.empty(patches_shape)
+        patches = np.empty(patches_shape, dtype=X.dtype)
         for ii, image in enumerate(X):
             patches[ii * n_patches:(ii + 1) * n_patches] = extract_patches_2d(
                 image, patch_size, self.max_patches, self.random_state)
